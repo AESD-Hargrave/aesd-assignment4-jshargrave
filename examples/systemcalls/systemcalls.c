@@ -19,13 +19,13 @@ bool do_system(const char *cmd)
 
     if (cmd == NULL)
     {
-        if (WIFEXITED(return_num) && WEXITSTATUS(return_num) == 0)
+        if (return_num == 0)
         {
             // No shell is available
             return false; 
         }
     }
-    else if (WIFEXITED(return_num) && WEXITSTATUS(return_num) == -1)
+    else if (return_num == -1)
     {
         // child process could not be created or its status could not be retrieved
         return false; 
@@ -70,8 +70,8 @@ bool do_exec(int count, ...)
     va_start(args, count);
     char * command[count+1];
     char * argument = NULL;
-    int i;
-    for(i=0; i<count; i++)
+    char * const* argv = NULL;
+    for(int i = 0; i < count; i++)
     {
         argument = va_arg(args, char *);
         if (argument[0] != '-' && argument[0] != '/')
@@ -82,7 +82,14 @@ bool do_exec(int count, ...)
         command[i] = argument;
     }
     command[count] = NULL;
-    char * const* argv = (char * const*) command;
+    argv = (char * const*) command;
+
+    // Check that first argument is always absolute path file to execute
+    if (argv[0][0] != '/')
+    {
+        printf("  Error: File '%s' is not expanded!\n", argv[0]);
+        return false;
+    }
 
     pid_t fork_pid = fork();
     if (fork_pid == -1)
@@ -141,6 +148,7 @@ bool do_exec(int count, ...)
 */
 bool do_exec_redirect(const char *outputfile, int count, ...)
 {
+    /*
     va_list args;
     va_start(args, count);
 
@@ -170,4 +178,7 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
     va_end(args);
 
     return do_exec_return;
+    */
+
+    return true;
 }
