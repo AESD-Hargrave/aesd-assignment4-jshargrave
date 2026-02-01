@@ -1,4 +1,10 @@
 #include "systemcalls.h"
+#include "fcntl.h"
+#include <sys/stat.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <sys/stat.h>
 
 /**
  * @param cmd the command to execute with system()
@@ -9,13 +15,32 @@
 */
 bool do_system(const char *cmd)
 {
+    printf("Executing: %s\n", cmd);
+    int return_num = system(cmd);
 
-/*
- * TODO  add your code here
- *  Call the system() function with the command set in the cmd
- *   and return a boolean true if the system() call completed with success
- *   or false() if it returned a failure
-*/
+    if (cmd == NULL)
+    {
+        if (return_num == 0)
+        {
+            // No shell is available
+            return false; 
+        }
+    }
+    else if (return_num == -1)
+    {
+        // child process could not be created or its status could not be retrieved
+        return false; 
+    }
+    else if (return_num == 127)
+    {
+        // shell could not be executed in the child process
+        return false;
+    }
+    else if (return_num != 0)
+    {
+        // cmd command returned non-zero
+        return false;
+    }
 
     return true;
 }
@@ -36,28 +61,94 @@ bool do_system(const char *cmd)
 
 bool do_exec(int count, ...)
 {
+
+
+    if (count < 1)
+    {
+        printf("Error: do_exec() requires at least one argument besides count to work!");
+        return false;
+    }
+
     va_list args;
     va_start(args, count);
-    char * command[count+1];
-    int i;
-    for(i=0; i<count; i++)
+    
+    const char * path = va_arg(args, char *);
+    if(path[0] != '/')
     {
-        command[i] = va_arg(args, char *);
+        printf("Error: '%s' is not a absolute path!\n", path);
+        return false;
     }
-    command[count] = NULL;
-    // this line is to avoid a compile warning before your implementation is complete
-    // and may be removed
-    command[count] = command[count];
 
-/*
- * TODO:
- *   Execute a system command by calling fork, execv(),
- *   and wait instead of system (see LSP page 161).
- *   Use the command[0] as the full path to the command to execute
- *   (first argument to execv), and use the remaining arguments
- *   as second argument to the execv() command.
- *
-*/
+    char * argv[count];
+    char * argument = NULL;
+
+    for(int i = 0; i < count - 1; i++)
+    {
+        argument = va_arg(args, char *);
+        if (argument[0] != '-' && argument[0] != '/')
+        {
+            printf("Error: Argument '%s' is not expanded!\n", argument);
+            return false;
+        }
+        argv[i] = argument;
+    }
+    argv[count - 1] = NULL;
+
+
+    
+
+    struct stat file_stat;
+    int stat_returned = stat(path, &file_stat);
+    if (stat_returned == -1)
+    {
+        printf("Error: '%s' is not a valid path to a file to execute!\n", path);
+        return false;
+    }
+
+    pid_t fork_pid = fork();
+    if (fork_pid == -1)
+    {
+        printf("Error: Failed to create child proccess!\n");
+        return false;
+    }
+    else if (fork_pid == 0)
+    {
+        // Child logic
+        printf("Child executing: %s", path);
+        for (int i = 0; argv[i] != NULL; i++) 
+        {
+            printf(" %s", argv[i]);
+        }
+        printf("\n");
+
+        int execv_return = execv(path, (char * const*) argv);
+        if (execv_return == -1)
+        {
+            printf("Error child failed to run command\n");
+            return false;
+        }
+    }
+    else
+    {
+        // Parent logic
+        int wstatus;
+        pid_t waitpid_return = waitpid(fork_pid, &wstatus, WUNTRACED);
+        if (waitpid_return == -1)
+        {
+            printf("Error: Failed to wait for child %d!", fork_pid);
+            return false;
+        }
+        else if (!WIFEXITED(wstatus))
+        {
+            printf("Error: Child process did not exit normally\n");
+            return false;
+        }
+        else if (WEXITSTATUS(wstatus) != 0)
+        {
+            printf("Error: Child process did not return 0\n");
+            return false;
+        }
+    }
 
     va_end(args);
 
@@ -73,27 +164,31 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
 {
     va_list args;
     va_start(args, count);
-    char * command[count+1];
-    int i;
-    for(i=0; i<count; i++)
+
+    int fd = open(outputfile, O_CREAT, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
+    if (fd == -1)
     {
-        command[i] = va_arg(args, char *);
+        printf("Error: Failed to open file descriptor for %s\n", outputfile);
+        return false;
     }
-    command[count] = NULL;
-    // this line is to avoid a compile warning before your implementation is complete
-    // and may be removed
-    command[count] = command[count];
 
+    int dup_return = dup2(fd, 1);
+    if (dup_return == -1)
+    {
+        printf("Error: Failed to duplicated standard output to %s\n", outputfile);
+        return false;
+    }
 
-/*
- * TODO
- *   Call execv, but first using https://stackoverflow.com/a/13784315/1446624 as a refernce,
- *   redirect standard out to a file specified by outputfile.
- *   The rest of the behaviour is same as do_exec()
- *
-*/
+    int close_return = close(fd);
+    if (close_return == -1)
+    {
+        printf("Error: Failed to close %s file\n", outputfile);
+        return false;
+    }
+
+    bool do_exec_return = do_exec(count, args);
 
     va_end(args);
 
-    return true;
+    return do_exec_return;
 }
