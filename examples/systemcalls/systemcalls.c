@@ -15,28 +15,27 @@
 */
 bool do_system(const char *cmd)
 {
-    printf("  Executing: %s\n", cmd);
     int return_num = system(cmd);
 
     if (cmd == NULL)
     {
-        if (return_num == 0)
+        if (WIFEXITED(return_num) && WEXITSTATUS(return_num) == 0)
         {
             // No shell is available
             return false; 
         }
     }
-    else if (return_num == -1)
+    else if (WIFEXITED(return_num) && WEXITSTATUS(return_num) == -1)
     {
         // child process could not be created or its status could not be retrieved
         return false; 
     }
-    else if (return_num == 127)
+    else if (WIFEXITED(return_num) && WEXITSTATUS(return_num) == 127)
     {
         // shell could not be executed in the child process
         return false;
     }
-    else if (return_num != 0)
+    else if (WIFEXITED(return_num) && WEXITSTATUS(return_num) != 0)
     {
         // cmd command returned non-zero
         return false;
@@ -69,18 +68,10 @@ bool do_exec(int count, ...)
 
     va_list args;
     va_start(args, count);
-    
-    const char * path = va_arg(args, char *);
-    if(path[0] != '/')
-    {
-        printf("  Error: '%s' is not a absolute path!\n", path);
-        return false;
-    }
-
-    char * argv[count];
+    char * command[count+1];
     char * argument = NULL;
-
-    for(int i = 0; i < count - 1; i++)
+    int i;
+    for(i=0; i<count; i++)
     {
         argument = va_arg(args, char *);
         if (argument[0] != '-' && argument[0] != '/')
@@ -88,20 +79,10 @@ bool do_exec(int count, ...)
             printf("  Error: Argument '%s' is not expanded!\n", argument);
             return false;
         }
-        argv[i] = argument;
+        command[i] = argument;
     }
-    argv[count - 1] = NULL;
-
-
-    
-
-    struct stat file_stat;
-    int stat_returned = stat(path, &file_stat);
-    if (stat_returned == -1)
-    {
-        printf("  Error: '%s' is not a valid path to a file to execute!\n", path);
-        return false;
-    }
+    command[count] = NULL;
+    char * const* argv = (char * const*) command;
 
     pid_t fork_pid = fork();
     if (fork_pid == -1)
@@ -112,14 +93,14 @@ bool do_exec(int count, ...)
     else if (fork_pid == 0)
     {
         // Child logic
-        printf("  Child executing: %s", path);
+        printf("  Child executing: %s", argv[0]);
         for (int i = 0; argv[i] != NULL; i++) 
         {
             printf("   %s", argv[i]);
         }
         printf("  \n");
 
-        int execv_return = execv(path, (char * const*) argv);
+        int execv_return = execv(argv[0], argv);
         if (execv_return == -1)
         {
             printf("  Error child failed to run command\n");
