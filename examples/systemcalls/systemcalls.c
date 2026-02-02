@@ -30,12 +30,17 @@ bool do_system(const char *cmd)
         // child process could not be created or its status could not be retrieved
         return false; 
     }
-    else if (WIFEXITED(return_num) && WEXITSTATUS(return_num) == 127)
+    else if (!WIFEXITED(return_num))
+    {
+        // Shell should have exited
+        return false; 
+    }
+    else if (WEXITSTATUS(return_num) == 127)
     {
         // shell could not be executed in the child process
         return false;
     }
-    else if (WIFEXITED(return_num) && WEXITSTATUS(return_num) != 0)
+    else if (WEXITSTATUS(return_num) != 0)
     {
         // cmd command returned non-zero
         return false;
@@ -74,9 +79,16 @@ bool do_exec(int count, ...)
     for(int i = 0; i < count; i++)
     {
         argument = va_arg(args, char *);
-        if (argument[0] != '-' && argument[0] != '/')
+        if (i == 0 && argument[0] != '/')
+        {
+            printf("  Error: File '%s' is not expanded!\n", argument);
+            va_end(args);
+            return false;
+        }
+        else if (i > 0 && argument[0] != '-' && argument[0] != '/')
         {
             printf("  Error: Argument '%s' is not expanded!\n", argument);
+            va_end(args);
             return false;
         }
         command[i] = argument;
@@ -84,54 +96,44 @@ bool do_exec(int count, ...)
     command[count] = NULL;
     argv = (char * const*) command;
 
-    // Check that first argument is always absolute path file to execute
-    if (argv[0][0] != '/')
-    {
-        printf("  Error: File '%s' is not expanded!\n", argv[0]);
-        return false;
-    }
-
     pid_t fork_pid = fork();
     if (fork_pid == -1)
     {
         printf("  Error: Failed to create child proccess!\n");
+        va_end(args);
         return false;
     }
     else if (fork_pid == 0)
     {
         // Child logic
-        printf("  Child executing: %s", argv[0]);
-        for (int i = 0; argv[i] != NULL; i++) 
-        {
-            printf("   %s", argv[i]);
-        }
-        printf("  \n");
-
         int execv_return = execv(argv[0], argv);
         if (execv_return == -1)
         {
-            printf("  Error child failed to run command\n");
-            return false;
+            perror("execv");
+            _exit(127);
         }
     }
     else
     {
         // Parent logic
         int wstatus;
-        pid_t waitpid_return = waitpid(fork_pid, &wstatus, WUNTRACED);
+        pid_t waitpid_return = waitpid(fork_pid, &wstatus, 0);
         if (waitpid_return == -1)
         {
             printf("  Error: Failed to wait for child %d!", fork_pid);
+            va_end(args);
             return false;
         }
         else if (!WIFEXITED(wstatus))
         {
             printf("  Error: Child process did not exit normally\n");
+            va_end(args);
             return false;
         }
         else if (WEXITSTATUS(wstatus) != 0)
         {
             printf("  Error: Child process did not return 0\n");
+            va_end(args);
             return false;
         }
     }
@@ -148,37 +150,106 @@ bool do_exec(int count, ...)
 */
 bool do_exec_redirect(const char *outputfile, int count, ...)
 {
-    /*
+    if (count < 1)
+    {
+        printf("  Error: do_exec() requires at least one argument besides count to work!");
+        return false;
+    }
+
     va_list args;
     va_start(args, count);
-
-    int fd = open(outputfile, O_CREAT, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
-    if (fd == -1)
+    char * command[count+1];
+    char * argument = NULL;
+    char * const* argv = NULL;
+    for(int i = 0; i < count; i++)
     {
-        printf("  Error: Failed to open file descriptor for %s\n", outputfile);
+        argument = va_arg(args, char *);
+
+        if (argument == NULL)
+        {
+            printf("  Error: count '%d' was not populated correctly!\n", count);
+            va_end(args);
+            return false;
+        }
+        else if (i == 0 && argument[0] != '/')
+        {
+            printf("  Error: File '%s' is not expanded!\n", argument);
+            va_end(args);
+            return false;
+        }
+        else if (i > 0 && argument[0] != '-' && argument[0] != '/')
+        {
+            printf("  Error: Argument '%s' is not expanded!\n", argument);
+            va_end(args);
+            return false;
+        }
+        command[i] = argument;
+    }
+    command[count] = NULL;
+    argv = (char * const*) command;
+
+    pid_t fork_pid = fork();
+    if (fork_pid == -1)
+    {
+        printf("  Error: Failed to create child proccess!\n");
+        va_end(args);
         return false;
     }
-
-    int dup_return = dup2(fd, 1);
-    if (dup_return == -1)
+    else if (fork_pid == 0)
     {
-        printf("  Error: Failed to duplicated standard output to %s\n", outputfile);
-        return false;
-    }
+        // Child logic
+        int fd = open(outputfile, O_CREAT | O_WRONLY | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+        if (fd == -1)
+        {
+            _exit(127);
+        }
 
-    int close_return = close(fd);
-    if (close_return == -1)
+        int dup_return = dup2(fd, STDOUT_FILENO);
+        if (dup_return == -1)
+        {
+            close(fd);
+            _exit(127);
+        }
+
+        int close_return = close(fd);
+        if (close_return == -1)
+        {
+            _exit(127);
+        }
+
+        int execv_return = execv(argv[0], argv);
+        if (execv_return == -1)
+        {
+            perror("execv");
+            _exit(127);
+        }
+    }
+    else
     {
-        printf("  Error: Failed to close %s file\n", outputfile);
-        return false;
+        // Parent logic
+        int wstatus;
+        pid_t waitpid_return = waitpid(fork_pid, &wstatus, 0);
+        if (waitpid_return == -1)
+        {
+            printf("  Error: Failed to wait for child %d!", fork_pid);
+            va_end(args);
+            return false;
+        }
+        else if (!WIFEXITED(wstatus))
+        {
+            printf("  Error: Child process did not exit normally\n");
+            va_end(args);
+            return false;
+        }
+        else if (WEXITSTATUS(wstatus) != 0)
+        {
+            printf("  Error: Child process did not return 0\n");
+            va_end(args);
+            return false;
+        }
     }
-
-    bool do_exec_return = do_exec(count, args);
-
+    
     va_end(args);
-
-    return do_exec_return;
-    */
 
     return true;
 }
